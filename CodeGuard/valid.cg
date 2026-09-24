@@ -1,0 +1,14 @@
+int x;
+float y;
+
+x = 5;
+y = 3.14;
+
+if (x > 2) {
+    int z;
+    z = x + 5;
+}
+
+while (x < 10) {
+    x = x + 1;
+}
