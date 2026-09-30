@@ -1,925 +1,1013 @@
-import re
-import sys
-from dataclasses import dataclass
+import tkinter as tk
+from tkinter import ttk, filedialog, messagebox
+
+from codeguard import Lexer, Parser, SemanticAnalyzer
 
 
-# TOKEN
+class CodeGuardUI:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("CodeGuard - Static Analyzer for a C-Subset")
+        self.root.geometry("1200x750")
+        self.root.minsize(950, 600)
 
-@dataclass
-class Token:
-    type: str
-    value: str
-    line: int
+        self.current_file = None
 
-    def __repr__(self):
-        return f"[{self.type}: {self.value}]"
+        self.create_ui()
 
+    # ============================================================
+    # UI SETUP
+    # ============================================================
 
+    def create_ui(self):
 
-# PHASE 1: LEXICAL ANALYZER
+        # ========================================================
+        # HEADER
+        # ========================================================
 
-
-class Lexer:
-    KEYWORDS = {"int", "float", "if", "while", "return"}
-
-    TOKEN_SPECIFICATION = [
-        ("FLOAT",      r"\d+\.\d+"),
-        ("INTEGER",    r"\d+"),
-        ("IDENTIFIER", r"[A-Za-z][A-Za-z0-9]*"),
-        ("OPERATOR",   r"[=+\-<>]"),
-        ("SYMBOL",     r"[{}();]"),
-        ("NEWLINE",    r"\n"),
-        ("WHITESPACE", r"[ \t\r]+"),
-        ("MISMATCH",   r"."),
-    ]
-
-    def __init__(self, source_code):
-        self.source_code = source_code
-        self.tokens = []
-        self.errors = []
-
-    def tokenize(self):
-        pattern = "|".join(
-            f"(?P<{name}>{regex})"
-            for name, regex in self.TOKEN_SPECIFICATION
+        header = ttk.Frame(
+            self.root,
+            padding=15
         )
 
-        line = 1
+        header.pack(
+            fill="x"
+        )
 
-        for match in re.finditer(pattern, self.source_code):
-            token_type = match.lastgroup
-            value = match.group()
+        title = ttk.Label(
+            header,
+            text="CodeGuard",
+            font=("Arial", 24, "bold")
+        )
 
-            if token_type == "NEWLINE":
-                line += 1
-                continue
+        title.pack(
+            side="left"
+        )
 
-            if token_type == "WHITESPACE":
-                continue
+        subtitle = ttk.Label(
+            header,
+            text="Static Analyzer for a C-Subset",
+            font=("Arial", 11)
+        )
 
-            if token_type == "MISMATCH":
-                self.errors.append(
-                    f"Lexical Error on line {line}: "
-                    f"Unexpected character '{value}'"
-                )
-                continue
+        subtitle.pack(
+            side="left",
+            padx=(12, 0),
+            pady=(8, 0)
+        )
 
-            if token_type == "IDENTIFIER" and value in self.KEYWORDS:
-                token_type = "KEYWORD"
+        # ========================================================
+        # TOOLBAR
+        # ========================================================
 
-            elif token_type in ("FLOAT", "INTEGER"):
-                token_type = "LITERAL"
+        toolbar = ttk.Frame(
+            self.root,
+            padding=(15, 0, 15, 10)
+        )
 
-            self.tokens.append(
-                Token(token_type, value, line)
+        toolbar.pack(
+            fill="x"
+        )
+
+        ttk.Button(
+            toolbar,
+            text="Open File",
+            command=self.open_file
+        ).pack(
+            side="left",
+            padx=(0, 5)
+        )
+
+        ttk.Button(
+            toolbar,
+            text="Save",
+            command=self.save_file
+        ).pack(
+            side="left",
+            padx=5
+        )
+
+        ttk.Button(
+            toolbar,
+            text="Analyze Code",
+            command=self.analyze
+        ).pack(
+            side="left",
+            padx=5
+        )
+
+        ttk.Button(
+            toolbar,
+            text="Clear",
+            command=self.clear_editor
+        ).pack(
+            side="left",
+            padx=5
+        )
+
+        ttk.Button(
+            toolbar,
+            text="Load Sample",
+            command=self.load_sample
+        ).pack(
+            side="left",
+            padx=5
+        )
+
+        # ========================================================
+        # MAIN AREA
+        # ========================================================
+
+        main = ttk.PanedWindow(
+            self.root,
+            orient="horizontal"
+        )
+
+        main.pack(
+            fill="both",
+            expand=True,
+            padx=15,
+            pady=(0, 10)
+        )
+
+        # ========================================================
+        # LEFT SIDE - SOURCE CODE
+        # ========================================================
+
+        editor_frame = ttk.LabelFrame(
+            main,
+            text="Source Code",
+            padding=10
+        )
+
+        main.add(
+            editor_frame,
+            weight=1
+        )
+
+        # Editor container
+        editor_container = ttk.Frame(
+            editor_frame
+        )
+
+        editor_container.pack(
+            fill="both",
+            expand=True
+        )
+
+        self.editor = tk.Text(
+            editor_container,
+            wrap="none",
+            font=("Courier New", 12),
+            undo=True
+        )
+
+        self.editor.grid(
+            row=0,
+            column=0,
+            sticky="nsew"
+        )
+
+        editor_container.rowconfigure(
+            0,
+            weight=1
+        )
+
+        editor_container.columnconfigure(
+            0,
+            weight=1
+        )
+
+        # Vertical scrollbar
+        editor_scroll_y = ttk.Scrollbar(
+            editor_container,
+            orient="vertical",
+            command=self.editor.yview
+        )
+
+        editor_scroll_y.grid(
+            row=0,
+            column=1,
+            sticky="ns"
+        )
+
+        # Horizontal scrollbar
+        editor_scroll_x = ttk.Scrollbar(
+            editor_container,
+            orient="horizontal",
+            command=self.editor.xview
+        )
+
+        editor_scroll_x.grid(
+            row=1,
+            column=0,
+            sticky="ew"
+        )
+
+        self.editor.configure(
+            yscrollcommand=editor_scroll_y.set,
+            xscrollcommand=editor_scroll_x.set
+        )
+
+        # ========================================================
+        # RIGHT SIDE - RESULTS
+        # ========================================================
+
+        results_frame = ttk.LabelFrame(
+            main,
+            text="Analysis Results",
+            padding=10
+        )
+
+        main.add(
+            results_frame,
+            weight=1
+        )
+
+        self.notebook = ttk.Notebook(
+            results_frame
+        )
+
+        self.notebook.pack(
+            fill="both",
+            expand=True
+        )
+
+        # ========================================================
+        # TOKENS TAB
+        # ========================================================
+
+        token_tab = ttk.Frame(
+            self.notebook
+        )
+
+        self.notebook.add(
+            token_tab,
+            text="Tokens"
+        )
+
+        token_container = ttk.Frame(
+            token_tab
+        )
+
+        token_container.pack(
+            fill="both",
+            expand=True
+        )
+
+        self.token_output = tk.Text(
+            token_container,
+            wrap="none",
+            font=("Courier New", 11),
+            state="disabled"
+        )
+
+        self.token_output.grid(
+            row=0,
+            column=0,
+            sticky="nsew"
+        )
+
+        token_container.rowconfigure(
+            0,
+            weight=1
+        )
+
+        token_container.columnconfigure(
+            0,
+            weight=1
+        )
+
+        token_scroll_y = ttk.Scrollbar(
+            token_container,
+            orient="vertical",
+            command=self.token_output.yview
+        )
+
+        token_scroll_y.grid(
+            row=0,
+            column=1,
+            sticky="ns"
+        )
+
+        token_scroll_x = ttk.Scrollbar(
+            token_container,
+            orient="horizontal",
+            command=self.token_output.xview
+        )
+
+        token_scroll_x.grid(
+            row=1,
+            column=0,
+            sticky="ew"
+        )
+
+        self.token_output.configure(
+            yscrollcommand=token_scroll_y.set,
+            xscrollcommand=token_scroll_x.set
+        )
+
+        # ========================================================
+        # AST TAB
+        # ========================================================
+
+        ast_tab = ttk.Frame(
+            self.notebook
+        )
+
+        self.notebook.add(
+            ast_tab,
+            text="AST"
+        )
+
+        ast_container = ttk.Frame(
+            ast_tab
+        )
+
+        ast_container.pack(
+            fill="both",
+            expand=True
+        )
+
+        self.ast_output = tk.Text(
+            ast_container,
+            wrap="none",
+            font=("Courier New", 11),
+            state="disabled"
+        )
+
+        self.ast_output.grid(
+            row=0,
+            column=0,
+            sticky="nsew"
+        )
+
+        ast_container.rowconfigure(
+            0,
+            weight=1
+        )
+
+        ast_container.columnconfigure(
+            0,
+            weight=1
+        )
+
+        ast_scroll_y = ttk.Scrollbar(
+            ast_container,
+            orient="vertical",
+            command=self.ast_output.yview
+        )
+
+        ast_scroll_y.grid(
+            row=0,
+            column=1,
+            sticky="ns"
+        )
+
+        ast_scroll_x = ttk.Scrollbar(
+            ast_container,
+            orient="horizontal",
+            command=self.ast_output.xview
+        )
+
+        ast_scroll_x.grid(
+            row=1,
+            column=0,
+            sticky="ew"
+        )
+
+        self.ast_output.configure(
+            yscrollcommand=ast_scroll_y.set,
+            xscrollcommand=ast_scroll_x.set
+        )
+
+        # ========================================================
+        # ERRORS TAB
+        # ========================================================
+
+        error_tab = ttk.Frame(
+            self.notebook
+        )
+
+        self.notebook.add(
+            error_tab,
+            text="Errors / Summary"
+        )
+
+        error_container = ttk.Frame(
+            error_tab
+        )
+
+        error_container.pack(
+            fill="both",
+            expand=True
+        )
+
+        self.error_output = tk.Text(
+            error_container,
+            wrap="word",
+            font=("Courier New", 11),
+            state="disabled"
+        )
+
+        self.error_output.grid(
+            row=0,
+            column=0,
+            sticky="nsew"
+        )
+
+        error_container.rowconfigure(
+            0,
+            weight=1
+        )
+
+        error_container.columnconfigure(
+            0,
+            weight=1
+        )
+
+        error_scroll_y = ttk.Scrollbar(
+            error_container,
+            orient="vertical",
+            command=self.error_output.yview
+        )
+
+        error_scroll_y.grid(
+            row=0,
+            column=1,
+            sticky="ns"
+        )
+
+        self.error_output.configure(
+            yscrollcommand=error_scroll_y.set
+        )
+
+        # ========================================================
+        # STATUS BAR
+        # ========================================================
+
+        self.status = tk.StringVar()
+
+        self.status.set(
+            "Ready"
+        )
+
+        status_bar = ttk.Label(
+            self.root,
+            textvariable=self.status,
+            relief="sunken",
+            anchor="w",
+            padding=5
+        )
+
+        status_bar.pack(
+            fill="x"
+        )
+
+    # ============================================================
+    # FILE FUNCTIONS
+    # ============================================================
+
+    def open_file(self):
+
+        filepath = filedialog.askopenfilename(
+            title="Open CodeGuard File",
+            filetypes=[
+                ("CodeGuard Files", "*.cg"),
+                ("C Files", "*.c"),
+                ("Text Files", "*.txt"),
+                ("All Files", "*.*")
+            ]
+        )
+
+        if not filepath:
+            return
+
+        try:
+
+            with open(
+                filepath,
+                "r",
+                encoding="utf-8"
+            ) as file:
+
+                content = file.read()
+
+            self.editor.delete(
+                "1.0",
+                tk.END
             )
 
-        # EOF makes it easier for the parser to know when input ends.
-        self.tokens.append(Token("EOF", "EOF", line))
-
-        return self.tokens
-
-
-
-# ABSTRACT SYNTAX TREE
-
-
-@dataclass
-class Program:
-    statements: list
-
-
-@dataclass
-class Declaration:
-    data_type: str
-    identifier: str
-    line: int
-
-
-@dataclass
-class Assignment:
-    identifier: str
-    expression: object
-    line: int
-
-
-@dataclass
-class IfStatement:
-    condition: object
-    body: list
-    line: int
-
-
-@dataclass
-class WhileLoop:
-    condition: object
-    body: list
-    line: int
-
-
-@dataclass
-class BinaryExpression:
-    left: object
-    operator: str
-    right: object
-    line: int
-
-
-@dataclass
-class Identifier:
-    name: str
-    line: int
-
-
-@dataclass
-class Literal:
-    value: str
-    data_type: str
-    line: int
-
-
-
-# CUSTOM SYNTAX ERROR
-
-
-class CodeGuardSyntaxError(Exception):
-    pass
-
-
-
-# PHASE 2: PARSER
-# Recursive-Descent Parser
-
-
-class Parser:
-
-    def __init__(self, tokens):
-        self.tokens = tokens
-        self.position = 0
-        self.errors = []
-
-    def current(self):
-        return self.tokens[self.position]
-
-    def advance(self):
-        token = self.current()
-
-        if self.position < len(self.tokens) - 1:
-            self.position += 1
-
-        return token
-
-    def match(self, token_type=None, value=None):
-        token = self.current()
-
-        if token_type is not None and token.type != token_type:
-            return False
-
-        if value is not None and token.value != value:
-            return False
-
-        return True
-
-    def expect(self, token_type=None, value=None):
-        token = self.current()
-
-        if not self.match(token_type, value):
-
-            expected = value if value else token_type
-
-            raise CodeGuardSyntaxError(
-                f"Syntax Error on line {token.line}: "
-                f"Expected '{expected}', "
-                f"but found '{token.value}'"
+            self.editor.insert(
+                "1.0",
+                content
             )
 
-        return self.advance()
+            self.current_file = filepath
 
-
-    # Program -> StatementList
-
-
-    def parse(self):
-        statements = []
-
-        while not self.match("EOF"):
-
-            try:
-                statement = self.parse_statement()
-
-                if statement is not None:
-                    statements.append(statement)
-
-            except CodeGuardSyntaxError as error:
-                self.errors.append(str(error))
-                self.synchronize()
-
-        return Program(statements)
-
-    # Statement
-
-
-    def parse_statement(self):
-        token = self.current()
-
-        # Declaration
-        if token.type == "KEYWORD" and token.value in ("int", "float"):
-            return self.parse_declaration()
-
-        # If statement
-        if token.type == "KEYWORD" and token.value == "if":
-            return self.parse_if()
-
-        # While loop
-        if token.type == "KEYWORD" and token.value == "while":
-            return self.parse_while()
-
-        # Assignment
-        if token.type == "IDENTIFIER":
-            return self.parse_assignment()
-
-        raise CodeGuardSyntaxError(
-            f"Syntax Error on line {token.line}: "
-            f"Unexpected token '{token.value}'"
-        )
-
-  
-    # Declaration -> DataType Identifier ";"
-
-
-    def parse_declaration(self):
-
-        data_type = self.advance()
-
-        identifier = self.expect("IDENTIFIER")
-
-        self.expect("SYMBOL", ";")
-
-        return Declaration(
-            data_type.value,
-            identifier.value,
-            data_type.line
-        )
-
-    # Assignment -> Identifier "=" Expression ";"
-
-
-    def parse_assignment(self):
-
-        identifier = self.expect("IDENTIFIER")
-
-        self.expect("OPERATOR", "=")
-
-        expression = self.parse_expression()
-
-        self.expect("SYMBOL", ";")
-
-        return Assignment(
-            identifier.value,
-            expression,
-            identifier.line
-        )
-
-
-    # IfStatement ->
-    # "if" "(" Condition ")" "{" StatementList "}"
-
-
-    def parse_if(self):
-
-        if_token = self.expect("KEYWORD", "if")
-
-        self.expect("SYMBOL", "(")
-
-        condition = self.parse_condition()
-
-        self.expect("SYMBOL", ")")
-
-        self.expect("SYMBOL", "{")
-
-        body = self.parse_block()
-
-        return IfStatement(
-            condition,
-            body,
-            if_token.line
-        )
-
-  
-    # WhileLoop ->
-    # "while" "(" Condition ")" "{" StatementList "}"
- 
-
-    def parse_while(self):
-
-        while_token = self.expect("KEYWORD", "while")
-
-        self.expect("SYMBOL", "(")
-
-        condition = self.parse_condition()
-
-        self.expect("SYMBOL", ")")
-
-        self.expect("SYMBOL", "{")
-
-        body = self.parse_block()
-
-        return WhileLoop(
-            condition,
-            body,
-            while_token.line
-        )
-
-
-    # Parse statements inside { ... }
-
-
-    def parse_block(self):
-
-        statements = []
-
-        while not self.match("SYMBOL", "}"):
-
-            if self.match("EOF"):
-                token = self.current()
-
-                raise CodeGuardSyntaxError(
-                    f"Syntax Error on line {token.line}: "
-                    "Expected '}' before end of file"
-                )
-
-            statement = self.parse_statement()
-            statements.append(statement)
-
-        self.expect("SYMBOL", "}")
-
-        return statements
-
-   
-    # Condition ->
-    # Expression ("<" | ">") Expression
-   
-
-    def parse_condition(self):
-
-        left = self.parse_expression()
-
-        operator = self.current()
-
-        if not (
-            operator.type == "OPERATOR"
-            and operator.value in ("<", ">")
-        ):
-            raise CodeGuardSyntaxError(
-                f"Syntax Error on line {operator.line}: "
-                "Expected '<' or '>' in condition"
+            self.status.set(
+                f"Opened: {filepath}"
             )
 
-        self.advance()
+        except Exception as e:
 
-        right = self.parse_expression()
-
-        return BinaryExpression(
-            left,
-            operator.value,
-            right,
-            operator.line
-        )
-
-
-    # Expression -> Term (("+" | "-") Term)*
-
-
-    def parse_expression(self):
-
-        expression = self.parse_term()
-
-        while (
-            self.current().type == "OPERATOR"
-            and self.current().value in ("+", "-")
-        ):
-
-            operator = self.advance()
-
-            right = self.parse_term()
-
-            expression = BinaryExpression(
-                expression,
-                operator.value,
-                right,
-                operator.line
+            messagebox.showerror(
+                "File Error",
+                str(e)
             )
 
-        return expression
+    def save_file(self):
 
-    # Term -> Identifier | Literal
+        if self.current_file is None:
 
-
-    def parse_term(self):
-
-        token = self.current()
-
-        if token.type == "IDENTIFIER":
-
-            self.advance()
-
-            return Identifier(
-                token.value,
-                token.line
+            filepath = filedialog.asksaveasfilename(
+                defaultextension=".cg",
+                filetypes=[
+                    ("CodeGuard Files", "*.cg"),
+                    ("C Files", "*.c"),
+                    ("Text Files", "*.txt")
+                ]
             )
 
-        if token.type == "LITERAL":
-
-            self.advance()
-
-            if "." in token.value:
-                data_type = "float"
-            else:
-                data_type = "int"
-
-            return Literal(
-                token.value,
-                data_type,
-                token.line
-            )
-
-        raise CodeGuardSyntaxError(
-            f"Syntax Error on line {token.line}: "
-            f"Expected identifier or literal, "
-            f"but found '{token.value}'"
-        )
-
-  
-    # Error Recovery
-    # Skip tokens until a likely statement boundary.
-
-
-    def synchronize(self):
-
-        while not self.match("EOF"):
-
-            if self.match("SYMBOL", ";"):
-                self.advance()
+            if not filepath:
                 return
 
-            if self.match("SYMBOL", "}"):
-                self.advance()
+            self.current_file = filepath
+
+        try:
+
+            with open(
+                self.current_file,
+                "w",
+                encoding="utf-8"
+            ) as file:
+
+                file.write(
+                    self.editor.get(
+                        "1.0",
+                        tk.END
+                    )
+                )
+
+            self.status.set(
+                f"Saved: {self.current_file}"
+            )
+
+        except Exception as e:
+
+            messagebox.showerror(
+                "Save Error",
+                str(e)
+            )
+
+    # ============================================================
+    # ANALYSIS
+    # ============================================================
+
+    def analyze(self):
+
+        source = self.editor.get(
+            "1.0",
+            tk.END
+        ).strip()
+
+        if not source:
+
+            messagebox.showwarning(
+                "No Code",
+                "Enter or open source code first."
+            )
+
+            return
+
+        self.clear_outputs()
+
+        self.status.set(
+            "Analyzing..."
+        )
+
+        try:
+
+            # ====================================================
+            # PHASE 1: LEXICAL ANALYSIS
+            # ====================================================
+
+            lexer = Lexer(source)
+
+            tokens = lexer.tokenize()
+
+            token_text = (
+                "TOKEN TYPE      VALUE           LINE\n"
+            )
+
+            token_text += (
+                "=" * 50 + "\n"
+            )
+
+            for token in tokens:
+
+                if token.type == "EOF":
+                    continue
+
+                token_text += (
+                    f"{token.type:<15}"
+                    f"{token.value:<16}"
+                    f"{token.line}\n"
+                )
+
+            self.set_output(
+                self.token_output,
+                token_text
+            )
+
+            # ----------------------------------------------------
+            # CHECK LEXICAL ERRORS
+            # ----------------------------------------------------
+
+            if lexer.errors:
+
+                error_text = (
+                    "ANALYSIS FAILED\n\n"
+                    "✗ Lexical Analysis: Failed\n"
+                    "○ Syntax Analysis: Not performed\n"
+                    "○ Semantic Analysis: Not performed\n\n"
+                    "ERRORS\n"
+                    + "-" * 40
+                    + "\n"
+                )
+
+                error_text += "\n".join(
+                    lexer.errors
+                )
+
+                self.set_output(
+                    self.error_output,
+                    error_text
+                )
+
+                self.status.set(
+                    "Lexical analysis failed"
+                )
+
+                # Automatically show Errors tab
+                self.notebook.select(2)
+
                 return
 
-            self.advance()
+            # ====================================================
+            # PHASE 2: SYNTAX ANALYSIS
+            # ====================================================
 
-
-
-# PHASE 3: SEMANTIC ANALYZER
-
-
-class SemanticAnalyzer:
-
-    def __init__(self):
-
-        # Stack of dictionaries.
-        #
-        # Example:
-        #
-        # [
-        #     {"x": "int"},
-        #     {"y": "float"}
-        # ]
-        #
-        # First dictionary = global scope
-        # Last dictionary = current scope
-
-        self.scopes = [{}]
-
-        self.errors = []
-
-
-    # Scope Management
-
-
-    def enter_scope(self):
-        self.scopes.append({})
-
-    def exit_scope(self):
-        self.scopes.pop()
-
-
-    # Symbol Table Operations
-
-
-    def declare(self, name, data_type, line):
-
-        current_scope = self.scopes[-1]
-
-        if name in current_scope:
-
-            self.errors.append(
-                f"Semantic Error on line {line}: "
-                f"Variable '{name}' is already declared "
-                "in this scope."
+            parser = Parser(
+                tokens
             )
 
-            return
+            ast = parser.parse()
 
-        current_scope[name] = data_type
-
-    def lookup(self, name):
-
-        # Search from innermost scope outward.
-        for scope in reversed(self.scopes):
-
-            if name in scope:
-                return scope[name]
-
-        return None
-
-
-    # Main analysis
-
-
-    def analyze(self, program):
-
-        for statement in program.statements:
-            self.analyze_statement(statement)
-
-    # Statement Analysis
-
-
-    def analyze_statement(self, statement):
-
-        if isinstance(statement, Declaration):
-
-            self.declare(
-                statement.identifier,
-                statement.data_type,
-                statement.line
+            ast_text = self.format_ast(
+                ast
             )
 
-        elif isinstance(statement, Assignment):
-
-            self.analyze_assignment(statement)
-
-        elif isinstance(statement, IfStatement):
-
-            self.analyze_expression(statement.condition)
-
-            self.enter_scope()
-
-            for child in statement.body:
-                self.analyze_statement(child)
-
-            self.exit_scope()
-
-        elif isinstance(statement, WhileLoop):
-
-            self.analyze_expression(statement.condition)
-
-            self.enter_scope()
-
-            for child in statement.body:
-                self.analyze_statement(child)
-
-            self.exit_scope()
-
-
-    # Assignment Analysis
-
-
-    def analyze_assignment(self, assignment):
-
-        variable_type = self.lookup(
-            assignment.identifier
-        )
-
-        # Declared-before-use
-        if variable_type is None:
-
-            self.errors.append(
-                f"Semantic Error on line {assignment.line}: "
-                f"Variable '{assignment.identifier}' "
-                "was used before declaration."
+            self.set_output(
+                self.ast_output,
+                ast_text
             )
 
-            # Still inspect the expression for other errors.
-            self.analyze_expression(assignment.expression)
+            # ----------------------------------------------------
+            # CHECK SYNTAX ERRORS
+            # ----------------------------------------------------
 
-            return
+            if parser.errors:
 
-        expression_type = self.analyze_expression(
-            assignment.expression
-        )
-
-        if expression_type is None:
-            return
-
-        # Type consistency
-        if variable_type != expression_type:
-
-            self.errors.append(
-                f"Semantic Error on line {assignment.line}: "
-                f"Cannot assign value of type "
-                f"'{expression_type}' to variable "
-                f"'{assignment.identifier}' of type "
-                f"'{variable_type}'."
-            )
-
-    # Expression Analysis
-
-
-    def analyze_expression(self, expression):
-
-        # Literal
-        if isinstance(expression, Literal):
-            return expression.data_type
-
-        # Identifier
-        if isinstance(expression, Identifier):
-
-            variable_type = self.lookup(
-                expression.name
-            )
-
-            if variable_type is None:
-
-                self.errors.append(
-                    f"Semantic Error on line {expression.line}: "
-                    f"Variable '{expression.name}' "
-                    "was used before declaration "
-                    "or is outside its scope."
+                error_text = (
+                    "ANALYSIS FAILED\n\n"
+                    "✓ Lexical Analysis: Passed\n"
+                    "✗ Syntax Analysis: Failed\n"
+                    "○ Semantic Analysis: Not performed\n\n"
+                    "ERRORS\n"
+                    + "-" * 40
+                    + "\n"
                 )
 
-                return None
-
-            return variable_type
-
-        # Binary expression
-        if isinstance(expression, BinaryExpression):
-
-            left_type = self.analyze_expression(
-                expression.left
-            )
-
-            right_type = self.analyze_expression(
-                expression.right
-            )
-
-            if left_type is None or right_type is None:
-                return None
-
-            if left_type != right_type:
-
-                self.errors.append(
-                    f"Semantic Error on line {expression.line}: "
-                    f"Type mismatch between "
-                    f"'{left_type}' and '{right_type}'."
+                error_text += "\n".join(
+                    parser.errors
                 )
 
-                return None
+                self.set_output(
+                    self.error_output,
+                    error_text
+                )
 
-            # Relational expressions conceptually produce
-            # a boolean result, although bool is not part
-            # of the defined C-subset.
-            if expression.operator in ("<", ">"):
-                return "bool"
+                self.status.set(
+                    "Syntax analysis failed"
+                )
 
-            return left_type
+                self.notebook.select(2)
 
-        return None
+                return
 
+            # ====================================================
+            # PHASE 3: SEMANTIC ANALYSIS
+            # ====================================================
 
+            semantic = SemanticAnalyzer()
 
-# AST DISPLAY
-
-
-def print_ast(node, indent=0):
-
-    spacing = "  " * indent
-
-    if isinstance(node, Program):
-
-        print(spacing + "Program")
-
-        for statement in node.statements:
-            print_ast(statement, indent + 1)
-
-    elif isinstance(node, Declaration):
-
-        print(
-            spacing
-            + f"Declaration(type={node.data_type}, "
-            + f"name={node.identifier})"
-        )
-
-    elif isinstance(node, Assignment):
-
-        print(
-            spacing
-            + f"Assignment(name={node.identifier})"
-        )
-
-        print_ast(node.expression, indent + 1)
-
-    elif isinstance(node, IfStatement):
-
-        print(spacing + "IfStatement")
-
-        print(spacing + "  Condition:")
-
-        print_ast(node.condition, indent + 2)
-
-        print(spacing + "  Body:")
-
-        for statement in node.body:
-            print_ast(statement, indent + 2)
-
-    elif isinstance(node, WhileLoop):
-
-        print(spacing + "WhileLoop")
-
-        print(spacing + "  Condition:")
-
-        print_ast(node.condition, indent + 2)
-
-        print(spacing + "  Body:")
-
-        for statement in node.body:
-            print_ast(statement, indent + 2)
-
-    elif isinstance(node, BinaryExpression):
-
-        print(
-            spacing
-            + f"BinaryExpression({node.operator})"
-        )
-
-        print_ast(node.left, indent + 1)
-        print_ast(node.right, indent + 1)
-
-    elif isinstance(node, Identifier):
-
-        print(
-            spacing
-            + f"Identifier({node.name})"
-        )
-
-    elif isinstance(node, Literal):
-
-        print(
-            spacing
-            + f"Literal({node.value}: {node.data_type})"
-        )
-
-
-# ============================================================
-# CODEGUARD DRIVER
-# ============================================================
-
-def analyze_code(source_code):
-
-    print("=" * 60)
-    print("CODEGUARD - STATIC ANALYZER FOR A C-SUBSET")
-    print("=" * 60)
-
-    # --------------------------------------------------------
-    # Phase 1: Lexical Analysis
-    # --------------------------------------------------------
-
-    print("\nPHASE 1: LEXICAL ANALYSIS")
-    print("-" * 60)
-
-    lexer = Lexer(source_code)
-
-    tokens = lexer.tokenize()
-
-    if lexer.errors:
-
-        for error in lexer.errors:
-            print(error)
-
-        print("\nAnalysis stopped due to lexical errors.")
-        return
-
-    for token in tokens:
-
-        if token.type != "EOF":
-            print(
-                f"Line {token.line}: "
-                f"[{token.type}: {token.value}]"
+            semantic.analyze(
+                ast
             )
 
-    print("\nLexical analysis successful.")
+            # ----------------------------------------------------
+            # CHECK SEMANTIC ERRORS
+            # ----------------------------------------------------
 
-    
-    # Phase 2: Syntax Analysis
+            if semantic.errors:
 
+                error_text = (
+                    "ANALYSIS FAILED\n\n"
+                    "✓ Lexical Analysis: Passed\n"
+                    "✓ Syntax Analysis: Passed\n"
+                    "✗ Semantic Analysis: Failed\n\n"
+                    "ERRORS\n"
+                    + "-" * 40
+                    + "\n"
+                )
 
-    print("\nPHASE 2: SYNTAX ANALYSIS")
-    print("-" * 60)
+                error_text += "\n".join(
+                    semantic.errors
+                )
 
-    parser = Parser(tokens)
+                self.set_output(
+                    self.error_output,
+                    error_text
+                )
 
-    program = parser.parse()
+                self.status.set(
+                    "Semantic analysis failed"
+                )
 
-    if parser.errors:
+                self.notebook.select(2)
 
-        for error in parser.errors:
-            print(error)
+                return
 
-        print("\nSyntax analysis found errors.")
-        return
+            # ====================================================
+            # ALL PHASES PASSED
+            # ====================================================
 
-    print("Syntax analysis successful.")
+            success_message = (
+                "ANALYSIS SUCCESSFUL\n\n"
+                "✓ Lexical Analysis: Passed\n"
+                "✓ Syntax Analysis: Passed\n"
+                "✓ Semantic Analysis: Passed\n\n"
+                "No lexical, syntax, or semantic "
+                "errors were detected."
+            )
 
-    # --------------------------------------------------------
-    # AST
-    # --------------------------------------------------------
+            self.set_output(
+                self.error_output,
+                success_message
+            )
 
-    print("\nABSTRACT SYNTAX TREE")
-    print("-" * 60)
+            self.status.set(
+                "Analysis completed successfully"
+            )
 
-    print_ast(program)
+            self.notebook.select(2)
 
+        except Exception as e:
 
-    # Phase 3: Semantic Analysis
-  
+            self.set_output(
+                self.error_output,
+                "ANALYSIS FAILED\n\n"
+                + "Unexpected application error:\n"
+                + str(e)
+            )
 
-    print("\nPHASE 3: SEMANTIC ANALYSIS")
-    print("-" * 60)
+            self.status.set(
+                "Analysis completed with errors"
+            )
 
-    analyzer = SemanticAnalyzer()
+            self.notebook.select(2)
 
-    analyzer.analyze(program)
+    # ============================================================
+    # AST DISPLAY
+    # ============================================================
 
-    if analyzer.errors:
+    def format_ast(
+        self,
+        node,
+        level=0
+    ):
 
-        for error in analyzer.errors:
-            print(error)
-
-        print("\nSemantic analysis found errors.")
-
-    else:
-
-        print("Semantic analysis successful.")
-
-    # Final Report
- 
-    print("\n" + "=" * 60)
-    print("CODEGUARD ANALYSIS SUMMARY")
-    print("=" * 60)
-
-    total_errors = (
-        len(lexer.errors)
-        + len(parser.errors)
-        + len(analyzer.errors)
-    )
-
-    if total_errors == 0:
-
-        print(
-            "RESULT: PASSED\n"
-            "No lexical, syntax, or semantic errors detected."
+        indent = (
+            "    " * level
         )
 
-    else:
+        if node is None:
 
-        print(
-            f"RESULT: FAILED\n"
-            f"Total errors detected: {total_errors}"
+            return (
+                indent
+                + "None\n"
+            )
+
+        # --------------------------------------------------------
+        # LIST
+        # --------------------------------------------------------
+
+        if isinstance(
+            node,
+            list
+        ):
+
+            result = ""
+
+            for item in node:
+
+                result += self.format_ast(
+                    item,
+                    level
+                )
+
+            return result
+
+        # --------------------------------------------------------
+        # SIMPLE VALUES
+        # --------------------------------------------------------
+
+        if isinstance(
+            node,
+            (str, int, float)
+        ):
+
+            return (
+                indent
+                + repr(node)
+                + "\n"
+            )
+
+        # --------------------------------------------------------
+        # AST OBJECT
+        # --------------------------------------------------------
+
+        result = (
+            indent
+            + node.__class__.__name__
+            + "\n"
+        )
+
+        if hasattr(
+            node,
+            "__dict__"
+        ):
+
+            for name, value in vars(node).items():
+
+                result += (
+                    indent
+                    + "    "
+                    + name
+                    + ": "
+                )
+
+                if isinstance(
+                    value,
+                    (str, int, float)
+                ):
+
+                    result += (
+                        repr(value)
+                        + "\n"
+                    )
+
+                else:
+
+                    result += "\n"
+
+                    result += self.format_ast(
+                        value,
+                        level + 2
+                    )
+
+        return result
+
+    # ============================================================
+    # OUTPUT HELPER
+    # ============================================================
+
+    def set_output(
+        self,
+        widget,
+        content
+    ):
+
+        widget.configure(
+            state="normal"
+        )
+
+        widget.delete(
+            "1.0",
+            tk.END
+        )
+
+        widget.insert(
+            "1.0",
+            content
+        )
+
+        widget.configure(
+            state="disabled"
+        )
+
+    # ============================================================
+    # CLEAR OUTPUTS
+    # ============================================================
+
+    def clear_outputs(self):
+
+        self.set_output(
+            self.token_output,
+            ""
+        )
+
+        self.set_output(
+            self.ast_output,
+            ""
+        )
+
+        self.set_output(
+            self.error_output,
+            ""
+        )
+
+    # ============================================================
+    # CLEAR EVERYTHING
+    # ============================================================
+
+    def clear_editor(self):
+
+        self.editor.delete(
+            "1.0",
+            tk.END
+        )
+
+        self.clear_outputs()
+
+        self.current_file = None
+
+        self.status.set(
+            "Ready"
+        )
+
+    # ============================================================
+    # LOAD SAMPLE PROGRAM
+    # ============================================================
+
+    def load_sample(self):
+
+        sample = """int x;
+float y;
+
+x = 5;
+y = 3.14;
+
+if (x > 2) {
+    int z;
+    z = x + 5;
+}
+
+while (x < 10) {
+    x = x + 1;
+}
+"""
+
+        self.editor.delete(
+            "1.0",
+            tk.END
+        )
+
+        self.editor.insert(
+            "1.0",
+            sample
+        )
+
+        self.current_file = None
+
+        self.clear_outputs()
+
+        self.status.set(
+            "Sample program loaded"
         )
 
 
-
-# FILE INPUT
-
-
-def main():
-
-    if len(sys.argv) != 2:
-
-        print("Usage:")
-        print("    python codeguard.py <source_file>")
-        print("\nExample:")
-        print("    python codeguard.py test.cg")
-
-        return
-
-    filename = sys.argv[1]
-
-    try:
-
-        with open(filename, "r", encoding="utf-8") as file:
-            source_code = file.read()
-
-    except FileNotFoundError:
-
-        print(
-            f"Error: File '{filename}' was not found."
-        )
-
-        return
-
-    analyze_code(source_code)
-
+# ================================================================
+# RUN APPLICATION
+# ================================================================
 
 if __name__ == "__main__":
-    main()
+
+    root = tk.Tk()
+
+    app = CodeGuardUI(
+        root
+    )
+
+    root.mainloop()
